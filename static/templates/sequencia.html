@@ -3,10 +3,14 @@
     <div class="col-sm-6 col-md-4 viewWindow-panel viewWindow-panel-C">
       <div class="viewWindow-panel-container">
         <h4 class="text-center">Aponte uma sequencia de acordes</h4>
-        <div class="acordes-container" ng-repeat='sequencia in Sequencia.sequenciasFamosas' ng-click="Sequencia.pesquisarPorSequencia(sequencia)">
+        <div ng-if="Sequencia.erro" style="color: red; margin-bottom: 10px;">{{Sequencia.erro}}</div>
+        <div class="acordes-container" ng-repeat='sequencia in Sequencia.sequenciasFamosas' ng-click="Sequencia.pesquisarPorSequencia(sequencia)" style="display: flex; align-items: center; flex-wrap: wrap; gap: 4px;">
           <df-hex acorde="{{acordeon.acorde}}" acorde-color="{{acordeon.cor}}" acorde-checked="Sequencia.temAcorde(acordeon)" ng-repeat="acordeon in sequencia.acordes"></df-hex>
         </div>
         <br style="clear: both;">
+        <div style="text-align: center; margin-top: 15px;">
+          <button style="background-color: #2E1C74; color: white; border: none; padding: 8px 16px; border-radius: 4px;" ng-click="Sequencia.abrirModalCadastro()">Cadastrar nova sequência</button>
+        </div>
         <button class="search-results-count" ng-if="Sequencia.showSearchResultsCount" ng-click="Sequencia.goToResults()">
           <span class="glyphicon glyphicon-triangle-bottom bounce animated infinite"></span>
           <br>
@@ -30,9 +34,13 @@
                 </select>
               </div>
             </div>
-            <div class="col-md-9">
+            <div class="col-md-6">
               <df-hex acorde="{{acordeon.acorde}}" acorde-color="{{acordeon.cor}}" ng-repeat="acordeon in Sequencia.minhaSequencia.acordes" ng-click="Sequencia.limparPesquisa()"></df-hex>
               <br style="clear: both;"><br>
+            </div>
+            <div class="col-md-3" style="text-align: right;">
+              <button ng-if="Sequencia.minhaSequencia.editavel" style="background-color: #2E1C74; color: white; border: none; padding: 6px 12px; border-radius: 4px; margin-left: 4px;" ng-click="Sequencia.editarSequencia(Sequencia.minhaSequencia)">Editar</button>
+              <button ng-if="Sequencia.minhaSequencia.editavel" style="background-color: #2E1C74; color: white; border: none; padding: 6px 12px; border-radius: 4px; margin-left: 4px;" ng-click="Sequencia.excluirSequencia(Sequencia.minhaSequencia)">Excluir</button>
             </div>
           </div>
         </div>
@@ -61,3 +69,26 @@
     </div>
   </div>
 </div>
+
+<script type="text/ng-template" id="modalCadastroSequencia.html">
+  <div class="modal-header" style="background-color: #2E1C74; color: white;">
+    <h3 class="modal-title">Cadastrar nova sequência</h3>
+  </div>
+  <div class="modal-body" style="background-color: #f5f5f5;">
+    <div style="display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-bottom: 10px;">
+      <div class="acordes-container" style="margin: 0; display: flex; align-items: center; flex-wrap: wrap;">
+        <df-hex acorde="{{a.acorde}}" acorde-color="#2E1C74" ng-repeat="a in SequenciaModal.novaSequencia.acordes track by $index"></df-hex>
+      </div>
+    </div>
+    <div style="display: flex; align-items: center; gap: 6px; flex-wrap: wrap;">
+      <input type="text" ng-model="SequenciaModal.novoAcorde" placeholder="Ex: C" style="height: 32px; padding: 4px 8px; color: #333; background-color: #fff;"/>
+      <button style="background-color: #2E1C74; color: white; border: none; padding: 6px 12px; border-radius: 4px;" ng-click="SequenciaModal.adicionarAcordeNova(SequenciaModal.novoAcorde); SequenciaModal.novoAcorde='';">Adicionar</button>
+      <button style="background-color: #2E1C74; color: white; border: none; padding: 6px 12px; border-radius: 4px;" ng-click="SequenciaModal.removerUltimoNova()">Remover</button>
+    </div>
+    <div ng-if="SequenciaModal.erro" style="color: red; margin-top: 10px;">{{SequenciaModal.erro}}</div>
+  </div>
+  <div class="modal-footer" style="background-color: #f5f5f5;">
+    <button style="background-color: #2E1C74; color: white; border: none; padding: 6px 12px; border-radius: 4px;" ng-click="SequenciaModal.cadastrar()">Cadastrar</button>
+    <button style="background-color: #6c757d; color: white; border: none; padding: 6px 12px; border-radius: 4px;" ng-click="SequenciaModal.cancelar()">Cancelar</button>
+  </div>
+</script>
