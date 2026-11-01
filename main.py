@@ -5,8 +5,151 @@ import sys
 from musica import *
 from collections import OrderedDict
 import unicodedata
+import os
+import sqlite3
+from datetime import datetime
 
 app = Flask(__name__)
+
+DB_DIR = os.environ.get('SEQ_DB_DIR', os.path.join(os.path.dirname(os.path.abspath(__file__)), 'data'))
+DB_PATH = os.path.join(DB_DIR, 'sequencias_customizadas.db')
+
+
+def init_db():
+    global DB_DIR, DB_PATH
+    try:
+        os.makedirs(DB_DIR, exist_ok=True)
+    except Exception:
+        pass
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        cur = conn.cursor()
+        cur.execute('''CREATE TABLE IF NOT EXISTS sequencias_customizadas (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            acordes TEXT UNIQUE NOT NULL,
+            criado_em TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )''')
+        conn.commit()
+        conn.close()
+        return
+    except Exception:
+        pass
+    # fallback
+    try:
+        alt_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'data')
+        os.makedirs(alt_dir, exist_ok=True)
+        DB_DIR = alt_dir
+        DB_PATH = os.path.join(DB_DIR, 'sequencias_customizadas.db')
+        conn = sqlite3.connect(DB_PATH)
+        cur = conn.cursor()
+        cur.execute('''CREATE TABLE IF NOT EXISTS sequencias_customizadas (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            acordes TEXT UNIQUE NOT NULL,
+            criado_em TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )''')
+        conn.commit()
+        conn.close()
+    except Exception:
+        pass
+
+
+def get_custom_sequences():
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    cur = conn.cursor()
+    cur.execute('SELECT id, acordes, criado_em FROM sequencias_customizadas ORDER BY id')
+    rows = cur.fetchall()
+    conn.close()
+    result = []
+    for r in rows:
+        result.append({'id': r['id'], 'acordes': r['acordes']})
+    return result
+
+
+def get_custom_by_id(seq_id):
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    cur = conn.cursor()
+    cur.execute('SELECT id, acordes FROM sequencias_customizadas WHERE id = ?', (seq_id,))
+    row = cur.fetchone()
+    conn.close()
+    if not row:
+        return None
+    return {'id': row['id'], 'acordes': row['acordes']}
+
+
+def get_custom_by_acordes(acordes_str):
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    cur = conn.cursor()
+    cur.execute('SELECT id, acordes FROM sequencias_customizadas WHERE acordes = ?', (acordes_str,))
+    row = cur.fetchone()
+    conn.close()
+    if not row:
+        return None
+    return {'id': row['id'], 'acordes': row['acordes']}
+
+
+def create_custom_sequence(acordes_str):
+    conn = sqlite3.connect(DB_PATH)
+    cur = conn.cursor()
+    try:
+        cur.execute('INSERT INTO sequencias_customizadas (acordes) VALUES (?)', (acordes_str,))
+        conn.commit()
+        seq_id = cur.lastrowid
+        conn.close()
+        return {'id': seq_id, 'acordes': acordes_str}, 201
+    except sqlite3.IntegrityError:
+        conn.close()
+        existing = get_custom_by_acordes(acordes_str)
+        if existing:
+            return existing, 200
+        return None, 409
+    except Exception:
+        conn.close()
+        return None, 500
+
+
+def update_custom_sequence(seq_id, acordes_str):
+    existing_by_id = get_custom_by_id(seq_id)
+    if not existing_by_id:
+        return None, 404
+    # check duplicate
+    dup = get_custom_by_acordes(acordes_str)
+    if dup and dup['id'] != int(seq_id):
+        return None, 409
+    conn = sqlite3.connect(DB_PATH)
+    cur = conn.cursor()
+    try:
+        cur.execute('UPDATE sequencias_customizadas SET acordes = ? WHERE id = ?', (acordes_str, seq_id))
+        conn.commit()
+        conn.close()
+        return {'id': int(seq_id), 'acordes': acordes_str}, 200
+    except sqlite3.IntegrityError:
+        conn.close()
+        return None, 409
+    except Exception:
+        conn.close()
+        return None, 500
+
+
+def delete_custom_sequence(seq_id):
+    existing_by_id = get_custom_by_id(seq_id)
+    if not existing_by_id:
+        return None, 404
+    conn = sqlite3.connect(DB_PATH)
+    cur = conn.cursor()
+    try:
+        cur.execute('DELETE FROM sequencias_customizadas WHERE id = ?', (seq_id,))
+        conn.commit()
+        conn.close()
+        return {'id': int(seq_id)}, 200
+    except Exception:
+        conn.close()
+        return None, 500
+
+
+init_db()
 
 def limpa_cifra(raw_cifra):
     cifra = []
@@ -167,6 +310,157 @@ def get_acordes():
 def get_musica(m_id):
     return json.dumps(musicas[m_id].__dict__)
 
+def sequencia_aparece_na_cifra(sequencia_tokens, cifra_da_musica):
+    if not sequencia_tokens or not cifra_da_musica:
+        return False
+    tamanho_da_sequencia = len(sequencia_tokens)
+    if tamanho_da_sequencia > len(cifra_da_musica):
+        return False
+    for posicao_inicial in range(len(cifra_da_musica) - tamanho_da_sequencia + 1):
+        trecho = cifra_da_musica[posicao_inicial:posicao_inicial + tamanho_da_sequencia]
+        if trecho == sequencia_tokens:
+            return True
+    return False
+
+
+def split_concatenated_chords(s):
+    if not s:
+        return []
+    result = []
+    i = 0
+    chords_list = sorted(list(acordes), key=len, reverse=True)
+    while i < len(s):
+        matched = None
+        # try to find longest matching chord from known set
+        for c in chords_list:
+            if s.startswith(c, i):
+                # make sure we don't cut in middle of something odd - prefer longest
+                matched = c
+                break
+        if matched:
+            result.append(matched)
+            i += len(matched)
+            continue
+        # fallback heuristics
+        # check 2-char
+        if i + 1 < len(s):
+            cand2 = s[i:i+2]
+            if cand2 in acordes:
+                result.append(cand2)
+                i += 2
+                continue
+        if i + 1 < len(s) and s[i+1] in ['m', '#', 'b', '7', '9']:
+            # try to extend a bit
+            if i + 2 < len(s) and s[i+2] in ['7', '9', '0', 'm']:
+                cand3 = s[i:i+3]
+                if cand3 in acordes:
+                    result.append(cand3)
+                    i += 3
+                    continue
+            cand2 = s[i:i+2]
+            result.append(cand2)
+            i += 2
+            continue
+        result.append(s[i])
+        i += 1
+    return result
+
+
+@app.route('/sequencias', methods=['GET', 'POST'])
+def sequencias_endpoint():
+    if request.method == 'GET':
+        # build unified list
+        result = []
+        # add originals - use known correct splits
+        original_splits = {
+            'BmGDA': ['Bm', 'G', 'D', 'A'],
+            'CGAmF': ['C', 'G', 'Am', 'F'],
+            'EmG': ['Em', 'G'],
+            'CA7DmG7': ['C', 'A7', 'Dm', 'G7'],
+            'GmF': ['Gm', 'F'],
+            'CC7FFm': ['C', 'C7', 'F', 'Fm'],
+        }
+        for seq_str, seq_id in sequencias.items():
+            acordes_list = original_splits.get(seq_str) or split_concatenated_chords(seq_str)
+            result.append({
+                'acordes': acordes_list,
+                'acordes_str': seq_str,
+                'origem': 'original',
+                'editavel': False,
+                'id': None
+            })
+        # add custom
+        customs = get_custom_sequences()
+        for c in customs:
+            result.append({
+                'acordes': c['acordes'].split(',') if c['acordes'] else [],
+                'acordes_str': c['acordes'],
+                'origem': 'customizada',
+                'editavel': True,
+                'id': c['id']
+            })
+        return json.dumps(result)
+    elif request.method == 'POST':
+        try:
+            data = request.get_json(force=True, silent=True) or {}
+        except Exception:
+            data = {}
+        acordes_list = data.get('acordes') or []
+        if not isinstance(acordes_list, list):
+            return json.dumps({'erro': 'acordes deve ser uma lista'}), 400
+        if len(acordes_list) < 2:
+            return json.dumps({'erro': 'sequencia precisa ter pelo menos 2 acordes'}), 400
+        # validate each chord exists in global acordes set
+        for ac in acordes_list:
+            if ac not in acordes:
+                return json.dumps({'erro': 'acorde nao existe no conjunto de acordes'}), 400
+        acordes_str = ','.join([str(a).strip() for a in acordes_list])
+        res, status = create_custom_sequence(acordes_str)
+        if status == 201 and res:
+            return json.dumps({'id': res['id'], 'acordes': res['acordes'].split(',') if res['acordes'] else [], 'acordes_str': res['acordes'], 'origem': 'customizada', 'editavel': True}), 201
+        elif status == 200 and res:
+            return json.dumps({'id': res['id'], 'acordes': res['acordes'].split(',') if res['acordes'] else [], 'acordes_str': res['acordes'], 'origem': 'customizada', 'editavel': True}), 200
+        elif status == 409:
+            return json.dumps({'erro': 'conflito'}), 409
+        else:
+            return json.dumps({'erro': 'erro ao criar'}), 500
+
+
+@app.route('/sequencias/<int:seq_id>', methods=['PUT', 'DELETE'])
+def sequencia_detail(seq_id):
+    if request.method == 'PUT':
+        try:
+            data = request.get_json(force=True, silent=True) or {}
+        except Exception:
+            data = {}
+        acordes_list = data.get('acordes') or []
+        if not isinstance(acordes_list, list):
+            return json.dumps({'erro': 'acordes deve ser uma lista'}), 400
+        if len(acordes_list) < 2:
+            return json.dumps({'erro': 'sequencia precisa ter pelo menos 2 acordes'}), 400
+        for ac in acordes_list:
+            if ac not in acordes:
+                return json.dumps({'erro': 'acorde nao existe no conjunto de acordes'}), 400
+        acordes_str = ','.join([str(a).strip() for a in acordes_list])
+        res, status = update_custom_sequence(seq_id, acordes_str)
+        if status == 200 and res:
+            return json.dumps({'id': res['id'], 'acordes': res['acordes'].split(',') if res['acordes'] else [], 'acordes_str': res['acordes'], 'origem': 'customizada', 'editavel': True}), 200
+        elif status == 404:
+            return json.dumps({'erro': 'nao encontrado'}), 404
+        elif status == 409:
+            return json.dumps({'erro': 'conflito'}), 409
+        else:
+            return json.dumps({'erro': 'erro ao atualizar'}), 500
+    elif request.method == 'DELETE':
+        res, status = delete_custom_sequence(seq_id)
+        if status == 200 and res:
+            return json.dumps({'id': res['id']}), 200
+        elif status == 404:
+            return json.dumps({'erro': 'nao encontrado'}), 404
+        else:
+            return json.dumps({'erro': 'erro ao remover'}), 500
+
+
 @app.route('/similares')
 def get_similares():
     # tratando request
@@ -188,12 +482,41 @@ def get_similares():
         musica = musicas[id_musica_tag]
         acordes = musica.acordes
     elif sequencia_tag:
-        acordes = sequencia_tag.replace(',','')
+        acordes_stripped = sequencia_tag.replace(' ', '')
+        acordes_concat = acordes_stripped.replace(',','')
         similares = []
 
-        if acordes in sequencias:
-            id_seq = sequencias[acordes]
+        if acordes_concat in sequencias:
+            id_seq = sequencias[acordes_concat]
             similares = get_pagina(get_similares_por_sequencia(id_seq, generos_key), pagina_tag)
+            return json.dumps(similares)
+        # check custom sequences
+        # try to find by exact acordes_str form
+        # normalized forms
+        custom = get_custom_by_acordes(acordes_stripped) or get_custom_by_acordes(acordes_concat.replace(',', ','))
+        # also try if user passed comma form
+        if not custom and ',' in acordes_stripped:
+            custom = get_custom_by_acordes(acordes_stripped)
+        if custom:
+            seq_tokens = custom['acordes'].split(',')
+            collection = apply_filtro(musicas.values(), generos_key)
+            similares_list = []
+            for musica in collection:
+                if sequencia_aparece_na_cifra(seq_tokens, musica.cifra):
+                    similar = {
+                        'id_unico_musica': musica.id_unico_musica,
+                        'id_artista': musica.id_artista,
+                        'id_musica': musica.id_musica,
+                        'nome_artista': musica.nome_artista,
+                        'nome_musica': musica.nome_musica,
+                        'popularidade': musica.popularidade,
+                        'acordes': musica.acordes,
+                        'genero': musica.genero,
+                        'url': musica.url,
+                    }
+                    similares_list.append(similar)
+            similares = get_pagina(similares_list, pagina_tag)
+            return json.dumps(similares)
         return json.dumps(similares)
 
     similares = get_similares(acordes, generos_key, id_musica_tag)
